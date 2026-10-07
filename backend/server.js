@@ -439,6 +439,56 @@ app.get('/api/templates', (req, res) => {
   ]);
 });
 
+// ---- Admin (khusus ADMIN_EMAIL) ----
+function requireAdmin(req, res, next) {
+  if (!isAdmin(req.user)) return res.status(403).json({ ok: false, error: 'Khusus admin.' });
+  next();
+}
+
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  try {
+    res.json(Object.assign({ ok: true }, await db.adminStats()));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: errMsg(e, 'Gagal memuat statistik.') });
+  }
+});
+
+app.get('/api/admin/prds', requireAdmin, async (req, res) => {
+  try {
+    res.json({ ok: true, prds: await db.listAllPRDs(req.query.limit) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: errMsg(e, 'Gagal memuat PRD.') });
+  }
+});
+
+app.get('/api/admin/ai', requireAdmin, (req, res) => {
+  const { providerStatus } = require('./lib/ai');
+  res.json({ ok: true, providers: providerStatus() });
+});
+
+app.post('/api/admin/ai/test', requireAdmin, async (req, res) => {
+  try {
+    const name = String((req.body && req.body.name) || '');
+    if (!['Muse', 'Tiarina', 'Kenari'].includes(name)) {
+      return res.status(400).json({ ok: false, error: 'Provider tidak dikenal.' });
+    }
+    const { testProvider } = require('./lib/ai');
+    res.json(Object.assign({ ok: true, provider: name }, await testProvider(name)));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: errMsg(e, 'Tes koneksi gagal.') });
+  }
+});
+
+app.post('/api/admin/ai', requireAdmin, (req, res) => {
+  try {
+    const { saveOverrides } = require('./lib/ai');
+    const saved = saveOverrides((req.body && req.body.providers) || {});
+    res.json({ ok: true, saved });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: errMsg(e, 'Gagal menyimpan.') });
+  }
+});
+
 // ---- React SPA: fallback untuk route client-side ----
 const SPA_ROUTES = ['/generator', '/riwayat', '/panduan', '/pengaturan'];
 SPA_ROUTES.forEach(function (r) {
@@ -447,6 +497,9 @@ SPA_ROUTES.forEach(function (r) {
   });
 });
 app.get('/prd/:id', function (req, res) {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+app.get('/admin', function (req, res) {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 // Redirect URL lama (.html) ke route baru
