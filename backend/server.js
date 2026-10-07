@@ -161,21 +161,30 @@ app.post('/api/generate', async (req, res) => {
     if (!ok) return res.status(403).json({ error: 'Verifikasi keamanan gagal. Muat ulang lalu coba lagi.' });
   }
   ndjsonHeaders(res);
+  // Hemat token: bila browser ditutup/di-refresh saat generate, batalkan AI yang sedang jalan.
+  const ac = new AbortController();
+  let clientGone = false;
+  const onClose = function () { clientGone = true; try { ac.abort(); } catch (_) {} };
+  req.on('close', onClose);
   try {
     const { byok } = aiContextFrom(req);
     const { generatePRD } = require('./lib/ai');
     const details = { description, audience, features, tech, answers, mindmap };
     const sections = [];
-    for await (const sec of generatePRD(String(idea), details, { byok })) {
+    for await (const sec of generatePRD(String(idea), details, { byok, signal: ac.signal })) {
+      if (clientGone || res.writableEnded) break;
       sections.push(sec);
       sendLine(res, { type: 'section', id: sec.id, title: sec.title, markdown: sec.markdown });
     }
+    if (clientGone) { try { res.end(); } catch (_) {} return; } // jangan simpan setengah jadi
     const markdown = sections.map((s) => s.markdown).join('\n\n');
     const title = String(idea).trim();
     const { id } = await db.savePRD(ownerOf(req), { title, idea: title, markdown });
     sendLine(res, { type: 'done', id });
   } catch (e) {
-    sendLine(res, { type: 'error', message: errMsg(e, 'Gagal generate PRD.') });
+    if (!clientGone) sendLine(res, { type: 'error', message: errMsg(e, 'Gagal generate PRD.') });
+  } finally {
+    req.off('close', onClose);
   }
   res.end();
 });

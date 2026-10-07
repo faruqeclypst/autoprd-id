@@ -62,7 +62,9 @@ function byokProvider(byok) {
   return { name: 'BYOK', baseUrl, apiKey, model };
 }
 
-/* Streaming chat completion satu provider: yield string chunks. */
+/* Streaming chat completion satu provider: yield string chunks.
+ * opts.signal (AbortSignal, opsional): bila di-abort (mis. browser ditutup),
+ * fetch AI ikut dibatalkan — hemat token. */
 async function* streamChat(p, system, user, opts) {
   opts = opts || {};
   const maxTokens = opts.maxTokens || 4000;
@@ -70,6 +72,16 @@ async function* streamChat(p, system, user, opts) {
   const ctrl = new AbortController();
   // Timeout total 90 detik: jangan pernah gantung selamanya.
   const timer = setTimeout(function(){ ctrl.abort(); }, 90000);
+  const extSignal = opts.signal;
+  const onExtAbort = function () { ctrl.abort(); };
+  if (extSignal) {
+    if (extSignal.aborted) { clearTimeout(timer); throw new Error('Dibatalkan: klien terputus.'); }
+    extSignal.addEventListener('abort', onExtAbort, { once: true });
+  }
+  const cleanup = function () {
+    clearTimeout(timer);
+    if (extSignal) extSignal.removeEventListener('abort', onExtAbort);
+  };
   try {
     res = await fetch(p.baseUrl + '/chat/completions', {
       method: 'POST',
@@ -90,10 +102,10 @@ async function* streamChat(p, system, user, opts) {
       signal: ctrl.signal,
     });
   } catch (err) {
-    clearTimeout(timer);
+    cleanup();
     throw new Error(p.name + ' gagal dihubungi: ' + (err && err.message ? err.message : err));
   }
-  clearTimeout(timer);
+  cleanup();
 
   if (!res.ok) {
     let detail = '';
@@ -153,6 +165,8 @@ async function* callAI(system, user, opts) {
       yield* streamChat(p, system, user, opts);
       return;
     } catch (err) {
+      // Klien terputus (browser ditutup): jangan failover, langsung berhenti — hemat token.
+      if (opts.signal && opts.signal.aborted) throw err;
       lastErr = err;
     }
   }
@@ -223,6 +237,7 @@ async function* generatePRD(idea, details, opts) {
   const { SECTIONS, SYSTEM } = require('./prompts.js');
   details = details || {};
   const byok = opts && opts.byok;
+  const signal = opts && opts.signal;
   const extra = buildExtraContext(details);
   let prev = '';
   for (const section of SECTIONS) {
@@ -235,7 +250,7 @@ async function* generatePRD(idea, details, opts) {
       PREV: prev.slice(-300),
     }) + extra;
     let markdown = '';
-    for await (const chunk of callAI(SYSTEM, user, { byok })) {
+    for await (const chunk of callAI(SYSTEM, user, { byok, signal })) {
       markdown += chunk;
     }
     prev = markdown;
