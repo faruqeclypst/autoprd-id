@@ -16,9 +16,11 @@ import Admin from './pages/Admin.jsx'
 function ScrollToTop() {
   const { pathname, hash } = useLocation();
   useEffect(function () {
-    if (hash) {
-      const el = document.querySelector(hash);
-      if (el) { el.scrollIntoView(); return; }
+    if (hash && /^#[A-Za-z_][\w-]*$/.test(hash)) {
+      try {
+        const el = document.querySelector(hash);
+        if (el) { el.scrollIntoView(); return; }
+      } catch (_) { /* hash bukan selector valid (mis. token OAuth) — abaikan */ }
     }
     window.scrollTo(0, 0);
   }, [pathname, hash]);

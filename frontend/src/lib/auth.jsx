@@ -64,6 +64,10 @@ export function AuthProvider({ children }) {
 
         const got = await client.auth.getSession();
         await applySession(got.data.session);
+        // Bersihkan token OAuth dari address bar setelah sesi terbaca.
+        if (window.location.hash && /access_token|refresh_token/.test(window.location.hash)) {
+          try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (_) {}
+        }
         const sub = client.auth.onAuthStateChange(function (_ev, session) { applySession(session); });
         unsubscribe = function () { try { sub.data.subscription.unsubscribe(); } catch (_) {} };
       } catch (_) {
