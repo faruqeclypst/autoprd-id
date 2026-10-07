@@ -11,6 +11,7 @@ import PrdDetail from './pages/PrdDetail.jsx'
 import Riwayat from './pages/Riwayat.jsx'
 import Panduan from './pages/Panduan.jsx'
 import Pengaturan from './pages/Pengaturan.jsx'
+import Admin from './pages/Admin.jsx'
 
 function ScrollToTop() {
   const { pathname, hash } = useLocation();
@@ -46,6 +47,7 @@ createRoot(document.getElementById('root')).render(
             <Route path="/riwayat" element={<AppShell variant="app"><Riwayat /></AppShell>} />
             <Route path="/panduan" element={<AppShell variant="app"><Panduan /></AppShell>} />
             <Route path="/pengaturan" element={<AppShell variant="app"><Pengaturan /></AppShell>} />
+            <Route path="/admin" element={<AppShell variant="app"><Admin /></AppShell>} />
           </Routes>
         </AuthProvider>
       </ThemeProvider>
