@@ -86,6 +86,18 @@ export default function Pengaturan() {
       <h1 className="font-display" style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--ink)' }}>Pengaturan</h1>
       <p className="muted mt-2 mb-10">Satu tempat untuk akun, riwayat PRD, dan kunci API.</p>
 
+      {ready && isAdmin && (
+        <section aria-label="Admin" className="mb-10">
+          <div className="card p-5 flex flex-wrap items-center gap-4">
+            <div className="flex-1" style={{ minWidth: '14rem' }}>
+              <p className="font-semibold" style={{ color: 'var(--ink)' }}>Kamu login sebagai admin.</p>
+              <p className="text-sm muted mt-1">Kelola statistik, PRD pengguna, dan provider AI server.</p>
+            </div>
+            <Link to="/admin" className="btn btn-primary btn-sm">Buka dashboard admin</Link>
+          </div>
+        </section>
+      )}
+
       <section aria-labelledby="tProfil" className="pb-10">
         <h2 id="tProfil" className="sec-title mb-5">Profil</h2>
         {!ready && (

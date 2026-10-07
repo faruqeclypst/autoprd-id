@@ -26,7 +26,7 @@ const LANDING_LINKS = [
 ];
 
 export default function Navbar({ variant }) {
-  const { user, login, logout } = useAuth();
+  const { user, isAdmin, login, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const loc = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -96,6 +96,7 @@ export default function Navbar({ variant }) {
                   <div className="menu-sep"></div>
                   <Link to="/pengaturan" role="menuitem">Pengaturan</Link>
                   <Link to="/riwayat" role="menuitem">Riwayat</Link>
+                  {isAdmin && <Link to="/admin" role="menuitem">Admin</Link>}
                   <button role="menuitem" data-logout onClick={logout}>Keluar</button>
                 </div>
               )}
@@ -128,6 +129,7 @@ export default function Navbar({ variant }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '.6rem', flexWrap: 'wrap' }}>
                 <Avatar user={user} />
                 <span className="account-name" style={{ fontWeight: 600 }}>{user.name || user.email}</span>
+                {isAdmin && <Link to="/admin" className="btn btn-ghost btn-sm" onClick={function () { setMobileOpen(false); }}>Admin</Link>}
                 <button onClick={logout} className="btn btn-ghost btn-sm">Keluar</button>
               </div>
             )}
