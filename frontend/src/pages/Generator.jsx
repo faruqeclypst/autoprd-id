@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch, getByok, setByok, withByok } from '../lib/api.js';
 import MindmapView from '../components/MindmapView.jsx';
+import Turnstile from '../components/Turnstile.jsx';
 
 const DRAFT_LS = 'autoprd_wizard_draft';
 const RING_C = 188.5;
@@ -141,6 +142,15 @@ export default function Generator() {
   const [doneCount, setDoneCount] = useState(0);
   const [genStatus, setGenStatus] = useState('AI sedang menulis tiap section satu per satu.');
   const [genError, setGenError] = useState('');
+  // Turnstile (aktif bila server mengkonfigurasi site key)
+  const [tsSiteKey, setTsSiteKey] = useState(null); // null=belum tahu, ''=nonaktif, string=aktif
+  const [tsToken, setTsToken] = useState('');
+  const tsRef = useRef(null);
+  useEffect(function () {
+    apiFetch('/api/config').then(function (r) { return r.json(); }).then(function (c) {
+      setTsSiteKey((c && c.turnstileSiteKey) || '');
+    }).catch(function () { setTsSiteKey(''); });
+  }, []);
 
   const mindmapRef = useRef(null);
   const ideaRef = useRef(null);
@@ -532,6 +542,10 @@ export default function Generator() {
   }
   async function startGeneration() {
     if (generatingRef.current) return;
+    if (tsSiteKey && !tsToken) {
+      setGenError('Selesaikan verifikasi keamanan dulu.');
+      return;
+    }
     generatingRef.current = true;
     setGenPhase('generating');
     setGenError('');
@@ -543,6 +557,7 @@ export default function Generator() {
     setGenStatus('AI sedang menulis tiap section satu per satu.');
     try {
       const body = withByok(buildGeneratePayload());
+      if (tsSiteKey && tsToken) body.turnstileToken = tsToken;
       const res = await apiFetch('/api/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -574,6 +589,8 @@ export default function Generator() {
       setGenPhase('error');
     } finally {
       generatingRef.current = false;
+      setTsToken('');
+      if (tsRef.current) tsRef.current.reset();
     }
   }
 
@@ -968,7 +985,16 @@ export default function Generator() {
             <div>
               <h2 className="text-2xl font-extrabold tracking-tight mb-2">Siap generate! 🚀</h2>
               <p className="text-sm text-[var(--ink-soft)] mb-6">PRD akan ditulis oleh AI API — teks mengalir live per section.</p>
-              <button className="btn-accent w-full sm:w-auto text-base" onClick={startGeneration}>✨ Generate PRD</button>
+              {tsSiteKey ? (
+                <div className="mb-5">
+                  <Turnstile ref={tsRef} siteKey={tsSiteKey}
+                    onToken={function (t) { setTsToken(t); setGenError(''); }}
+                    onExpire={function () { setTsToken(''); }} />
+                </div>
+              ) : null}
+              <button className="btn-accent w-full sm:w-auto text-base" onClick={startGeneration}
+                disabled={!!tsSiteKey && !tsToken}>✨ Generate PRD</button>
+              {genError && <p className="text-sm mt-3" role="alert" style={{ color: '#b3261e' }}>{genError}</p>}
             </div>
           )}
 
