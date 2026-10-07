@@ -37,6 +37,27 @@ function errMsg(err, fallback) {
   return err && err.message ? err.message : fallback;
 }
 
+const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
+const TURNSTILE_SITEKEY = process.env.TURNSTILE_SITE_KEY || '';
+
+// Verifikasi token Cloudflare Turnstile. Return true bila valid / bila tidak dikonfigurasi.
+async function verifyTurnstile(token, ip) {
+  if (!TURNSTILE_SECRET) return true; // tidak dikonfigurasi → lewati
+  if (!token) return false;
+  try {
+    const res = await fetch('https://challenges.cloudflare.com/turnstile/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ secret: TURNSTILE_SECRET, response: String(token), remoteip: ip || '' }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const d = await res.json().catch(() => ({}));
+    return !!(d && d.success);
+  } catch (_) {
+    return false;
+  }
+}
+
 // ---- config publik untuk frontend ----
 app.get('/api/config', (req, res) => {
   res.json({
@@ -47,6 +68,7 @@ app.get('/api/config', (req, res) => {
     // kunci publik Supabase aman diekspos ke browser (dirancang untuk itu)
     supabaseUrl: authEnabled() ? SUPABASE_URL : null,
     supabaseAnonKey: authEnabled() ? SUPABASE_ANON_KEY : null,
+    turnstileSiteKey: TURNSTILE_SITEKEY || null,
   });
 });
 
@@ -133,6 +155,10 @@ app.post('/api/generate', async (req, res) => {
   const { idea, description, audience, features, tech, answers, mindmap } = req.body || {};
   if (!idea || !description) {
     return res.status(400).json({ error: 'Field idea dan description wajib diisi.' });
+  }
+  if (TURNSTILE_SECRET) {
+    const ok = await verifyTurnstile(req.body && req.body.turnstileToken, req.ip);
+    if (!ok) return res.status(403).json({ error: 'Verifikasi keamanan gagal. Muat ulang lalu coba lagi.' });
   }
   ndjsonHeaders(res);
   try {
