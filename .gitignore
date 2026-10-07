@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Env & secrets — JANGAN commit
+.env
+.env.local
+*.pem
+*.key
+
+# Data lokal (mode tanpa Supabase) & antrean
+data/
+queue/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+.vscode/*
+.idea/
