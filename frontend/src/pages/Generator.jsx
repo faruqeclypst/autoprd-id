@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { apiFetch, getByok, setByok, withByok } from '../lib/api.js';
+import { apiFetch, apiJson, getByok, setByok, withByok } from '../lib/api.js';
 import MindmapView from '../components/MindmapView.jsx';
 import Turnstile from '../components/Turnstile.jsx';
 
@@ -69,25 +69,6 @@ function fmtAgo(ts) {
   if (s < 86400) return Math.floor(s / 3600) + ' jam lalu';
   return Math.floor(s / 86400) + ' hari lalu';
 }
-function readNDJSON(res, onEvent) {
-  return (async function () {
-    if (!res.body || !res.body.getReader) throw new Error('Browser tidak mendukung streaming. Coba Chrome/Firefox terbaru.');
-    const reader = res.body.getReader(), dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const r = await reader.read();
-      if (r.done) break;
-      buf += dec.decode(r.value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (!line) continue;
-        try { onEvent(JSON.parse(line)); } catch (_) { /* lewati baris rusak */ }
-      }
-    }
-  })();
-}
 function styleClass(style) {
   const s = String(style || '').toLowerCase();
   if (/glass/.test(s)) return 'pv-glass';
@@ -142,6 +123,9 @@ export default function Generator() {
   const [doneCount, setDoneCount] = useState(0);
   const [genStatus, setGenStatus] = useState('AI sedang menulis tiap section satu per satu.');
   const [genError, setGenError] = useState('');
+  const JOB_LS = 'autoprd_job';
+  const [jobId, setJobId] = useState(null);
+  const pollRef = useRef(null);
   // Turnstile (aktif bila server mengkonfigurasi site key)
   const [tsSiteKey, setTsSiteKey] = useState(null); // null=belum tahu, ''=nonaktif, string=aktif
   const [tsToken, setTsToken] = useState('');
@@ -537,6 +521,9 @@ export default function Generator() {
   function showPicker() {
     generatingRef.current = false;
     lastWritingId.current = null;
+    stopPolling();
+    setJobId(null);
+    try { localStorage.removeItem(JOB_LS); } catch (_) {}
     setGenPhase('picker');
     setGenError('');
   }
@@ -593,6 +580,168 @@ export default function Generator() {
       if (tsRef.current) tsRef.current.reset();
     }
   }
+
+  /* ---------- generate via job session (background) ---------- */
+  // Alur: POST /api/jobs → dapat jobId → polling GET /api/jobs/:id tiap 2,5 dtk.
+  // Browser boleh ditutup/di-refresh: backend tetap memproses sampai selesai.
+  function blankSections() {
+    return SECTIONS.map(function (s, idx) {
+      return { id: s.id, title: s.title, num: ('0' + (idx + 1)).slice(-2), state: 'wait', markdown: '', preview: '' };
+    });
+  }
+  function stopPolling() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }
+  function clearJobLs() { try { localStorage.removeItem(JOB_LS); } catch (_) {} }
+
+  function applyJob(job) {
+    const map = {};
+    (job.sections || []).forEach(function (s) { map[s.id] = s.state; });
+    setSections(function (prev) {
+      return prev.map(function (r) {
+        const st = map[r.id];
+        if (!st || st === r.state) return r;
+        return Object.assign({}, r, { state: st });
+      });
+    });
+    setDoneCount(job.doneCount || 0);
+    const writing = (job.sections || []).find(function (s) { return s.state === 'writing'; });
+    if (writing) {
+      const idx = SECTIONS.findIndex(function (x) { return x.id === writing.id; });
+      setGenStatus('Menulis section ' + (idx + 1) + '/' + SECTIONS.length + ': ' + writing.title);
+    }
+    if (job.status === 'done' && job.prdId) {
+      stopPolling();
+      generatingRef.current = false;
+      clearJobLs();
+      try { localStorage.removeItem(DRAFT_LS); } catch (_) {}
+      setJobId(null);
+      navigate('/prd/' + encodeURIComponent(job.prdId));
+    } else if (job.status === 'error') {
+      stopPolling();
+      generatingRef.current = false;
+      clearJobLs();
+      setJobId(null);
+      setGenError((job.error || 'Generate gagal.') + ' Periksa koneksi lalu coba lagi.');
+      setGenPhase('error');
+    } else if (job.status === 'cancelled') {
+      stopPolling();
+      generatingRef.current = false;
+      clearJobLs();
+      setJobId(null);
+      setGenPhase('picker');
+      setGenError('Generate dibatalkan.');
+    }
+  }
+
+  async function pollJob(id) {
+    try {
+      const r = await apiFetch('/api/jobs/' + encodeURIComponent(id));
+      if (r.status === 404) {
+        stopPolling();
+        generatingRef.current = false;
+        clearJobLs();
+        setJobId(null);
+        setGenError('Sesi generate tidak ditemukan. Silakan generate ulang.');
+        setGenPhase('error');
+        return;
+      }
+      const d = await r.json().catch(function () { return {}; });
+      if (d && d.job) applyJob(d.job);
+    } catch (_) { /* abaikan — coba lagi di interval berikut */ }
+  }
+
+  function startPolling(id) {
+    stopPolling();
+    pollJob(id);
+    pollRef.current = setInterval(function () { pollJob(id); }, 2500);
+  }
+
+  async function startGeneration() {
+    if (generatingRef.current) return;
+    if (tsSiteKey && !tsToken) {
+      setGenError('Selesaikan verifikasi keamanan dulu.');
+      return;
+    }
+    generatingRef.current = true;
+    setGenPhase('generating');
+    setGenError('');
+    setDoneCount(0);
+    lastWritingId.current = null;
+    setSections(blankSections());
+    setGenStatus('Menyiapkan sesi generate…');
+    try {
+      const body = withByok(buildGeneratePayload());
+      if (tsSiteKey && tsToken) body.turnstileToken = tsToken;
+      let id;
+      try {
+        const d = await apiJson('/api/jobs', body);
+        id = d.jobId;
+      } catch (e) {
+        // 409: sudah ada job aktif → langsung pantau job itu
+        if (e && e.status === 409 && e.data && e.data.jobId) {
+          id = e.data.jobId;
+        } else { throw e; }
+      }
+      try { localStorage.setItem(JOB_LS, id); } catch (_) {}
+      setJobId(id);
+      setGenStatus('AI sedang menulis. Kamu boleh menutup halaman ini — generate tetap berjalan di server.');
+      startPolling(id);
+    } catch (e) {
+      setGenError((e && e.message ? e.message : 'Terjadi kesalahan.') + ' Periksa koneksi lalu coba lagi.');
+      setGenPhase('error');
+      generatingRef.current = false;
+    } finally {
+      setTsToken('');
+      if (tsRef.current) tsRef.current.reset();
+    }
+  }
+
+  async function cancelGeneration() {
+    const id = jobId;
+    stopPolling();
+    generatingRef.current = false;
+    clearJobLs();
+    setJobId(null);
+    if (id) {
+      try { await apiJson('/api/jobs/' + encodeURIComponent(id) + '/cancel', {}); } catch (_) {}
+    }
+    showPicker();
+  }
+
+  // Lanjutkan pantauan bila ada job yang belum selesai (mis. setelah refresh/ tutup browser).
+  useEffect(function () {
+    let id = null;
+    try { id = localStorage.getItem(JOB_LS); } catch (_) {}
+    if (!id) return;
+    apiFetch('/api/jobs/' + encodeURIComponent(id)).then(function (r) {
+      if (!r.ok) { clearJobLs(); return null; }
+      return r.json();
+    }).then(function (d) {
+      const job = d && d.job;
+      if (!job) return;
+      if (job.status === 'queued' || job.status === 'running') {
+        generatingRef.current = true;
+        setJobId(id);
+        setStep(5);
+        setSections(blankSections());
+        setGenPhase('generating');
+        setGenError('');
+        setGenStatus('Melanjutkan pantauan generate yang sedang berjalan…');
+        applyJob(job);
+        startPolling(id);
+      } else {
+        clearJobLs();
+      }
+    }).catch(function () {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Bersihkan polling saat komponen dilepas.
+  useEffect(function () {
+    return function () { stopPolling(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---------- navigasi step ---------- */
   function showStep(n) {
@@ -1005,6 +1154,8 @@ export default function Generator() {
                   <span className="kicker">Generate</span>
                   <h2 className="gen-title">Menyusun PRD<span className="gen-dots" aria-hidden="true"><i></i><i></i><i></i></span></h2>
                   <p className="gen-status">{genStatus}</p>
+                  <p className="text-sm muted mt-2">Sesi tersimpan — kamu boleh menutup browser. Kembali ke halaman ini untuk melihat hasilnya.</p>
+                  <button type="button" className="btn btn-ghost btn-sm mt-3" onClick={cancelGeneration}>Batalkan generate</button>
                 </div>
                 <div className="gen-ring" role="progressbar" aria-label="Progress penyusunan PRD" aria-valuemin="0" aria-valuemax={SECTIONS.length} aria-valuenow={doneCount}>
                   <svg viewBox="0 0 72 72" aria-hidden="true">

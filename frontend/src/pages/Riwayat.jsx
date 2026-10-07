@@ -8,6 +8,16 @@ export default function Riwayat() {
   const [view, setView] = useState('loading'); // loading | error | empty | grid
   const [list, setList] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
+  const [activeJobs, setActiveJobs] = useState([]);
+
+  const loadJobs = useCallback(async function () {
+    try {
+      const r = await apiFetch('/api/jobs?limit=10');
+      const d = await r.json().catch(function () { return {}; });
+      const jobs = ((d && d.jobs) || []).filter(function (j) { return j.status === 'queued' || j.status === 'running'; });
+      setActiveJobs(jobs);
+    } catch (_) { /* abaikan */ }
+  }, []);
 
   const loadList = useCallback(async function () {
     setView('loading');
@@ -25,8 +35,8 @@ export default function Riwayat() {
   }, []);
 
   useEffect(function () {
-    if (ready) loadList();
-  }, [ready, loadList]);
+    if (ready) { loadList(); loadJobs(); }
+  }, [ready, loadList, loadJobs]);
 
   async function hapus(p) {
     if (!window.confirm('Hapus PRD "' + p.title + '"?\nTindakan ini tidak bisa dibatalkan.')) return;
@@ -48,6 +58,25 @@ export default function Riwayat() {
         </div>
         <Link to="/generator" className="show-sm-up btn btn-primary">＋ Buat PRD Baru</Link>
       </div>
+
+      {activeJobs.length > 0 && (
+        <div className="mb-8 space-y-3">
+          {activeJobs.map(function (j) {
+            return (
+              <Link key={j.id} to="/generator" className="card p-4 flex items-center gap-4 card-hover">
+                <span className="spinner" aria-hidden="true"></span>
+                <span className="flex-1" style={{ minWidth: 0 }}>
+                  <span className="block font-semibold truncate" style={{ color: 'var(--ink)' }}>
+                    Generate berjalan: {j.title || j.idea || 'tanpa judul'}
+                  </span>
+                  <span className="block text-xs muted mt-0.5">{j.doneCount}/{j.totalCount} section — klik untuk memantau</span>
+                </span>
+                <span className="hist-chev" aria-hidden="true">›</span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
 
       {view === 'loading' && (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">

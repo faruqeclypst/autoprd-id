@@ -189,6 +189,55 @@ app.post('/api/generate', async (req, res) => {
   res.end();
 });
 
+// ---- Job generate PRD (session background) ----
+// POST /api/jobs → { ok, jobId }: mulai generate di background. Browser boleh ditutup;
+//                                pantau via GET /api/jobs/:id (polling).
+app.post('/api/jobs', async (req, res) => {
+  try {
+    const { idea, description, audience, features, tech, answers, mindmap } = req.body || {};
+    if (!idea || !description) {
+      return res.status(400).json({ ok: false, error: 'Field idea dan description wajib diisi.' });
+    }
+    if (TURNSTILE_SECRET) {
+      const ok = await verifyTurnstile(req.body && req.body.turnstileToken, req.ip);
+      if (!ok) return res.status(403).json({ ok: false, error: 'Verifikasi keamanan gagal. Muat ulang lalu coba lagi.' });
+    }
+    const { byok } = aiContextFrom(req);
+    const jobs = require('./lib/jobs');
+    const job = jobs.createJob(ownerOf(req), {
+      idea: String(idea),
+      title: String(idea).trim(),
+      payload: { description, audience, features, tech, answers, mindmap },
+      byok,
+    });
+    res.json({ ok: true, jobId: job.id });
+  } catch (e) {
+    res.status(e.status || 500).json({ ok: false, error: errMsg(e, 'Gagal membuat job.'), jobId: e.jobId || undefined });
+  }
+});
+
+app.get('/api/jobs', (req, res) => {
+  const jobs = require('./lib/jobs');
+  res.json({ ok: true, jobs: jobs.listJobs(ownerOf(req), req.query.limit) });
+});
+
+app.get('/api/jobs/:id', (req, res) => {
+  const jobs = require('./lib/jobs');
+  const j = jobs.getJob(req.params.id, ownerOf(req));
+  if (!j) return res.status(404).json({ ok: false, error: 'Job tidak ditemukan.' });
+  res.json({ ok: true, job: jobs.publicJob(j) });
+});
+
+app.post('/api/jobs/:id/cancel', (req, res) => {
+  try {
+    const jobs = require('./lib/jobs');
+    jobs.cancelJob(req.params.id, ownerOf(req));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(e.status || 404).json({ ok: false, error: errMsg(e, 'Gagal membatalkan.') });
+  }
+});
+
 // GET /api/prds
 app.get('/api/prds', async (req, res) => {
   try {
