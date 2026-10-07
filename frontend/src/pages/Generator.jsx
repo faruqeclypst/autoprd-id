@@ -853,8 +853,8 @@ export default function Generator() {
                 {q.type === 'text' ? (
                   <textarea className="field q-text" rows="3" placeholder="Tulis jawabanmu…" value={answers[idx] || ''}
                     onChange={function (e) {
-                      const v = e.target.value.trim();
-                      setAnswers(function (a) { const n = Object.assign({}, a); if (v) n[idx] = v; else delete n[idx]; return n; });
+                      const v = e.target.value;
+                      setAnswers(function (a) { const n = Object.assign({}, a); if (v.trim()) n[idx] = v; else delete n[idx]; return n; });
                     }} />
                 ) : (
                   <div className="flex flex-wrap gap-2">
