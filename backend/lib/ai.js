@@ -139,7 +139,7 @@ async function* streamChat(p, system, user, opts) {
 async function* callAI(system, user, opts) {
   opts = opts || {};
   const byok = byokProvider(opts.byok);
-  let list = byok ? [byok] : providers();
+  let list = byok ? [byok] : applyOverrides(providers());
   if (list.length === 0) {
     throw new Error('AI tidak tersedia: belum ada API key di server dan tidak ada BYOK. Tempel base URL + API key + model milikmu di Pengaturan (BYOK).');
   }
@@ -243,4 +243,124 @@ async function* generatePRD(idea, details, opts) {
   }
 }
 
-module.exports = { generatePRD, callAI, byokProvider };
+/* ============================================================================
+ * Override AI per-provider oleh admin (disimpan di DATA_DIR/ai-overrides.json).
+ * Format: { "Muse": {baseUrl, apiKey, model, disabled}, "Tiarina": {...}, ... }
+ * Prioritas: override > env. `disabled: true` mematikan provider.
+ * ========================================================================== */
+const path = require('path');
+const fs = require('fs');
+
+function overridesPath() {
+  const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+  return path.join(DATA_DIR, 'ai-overrides.json');
+}
+
+function loadOverrides() {
+  try {
+    return JSON.parse(fs.readFileSync(overridesPath(), 'utf8')) || {};
+  } catch (_) { return {}; }
+}
+
+function saveOverrides(obj) {
+  const prev = loadOverrides();
+  const clean = JSON.parse(JSON.stringify(prev));
+  for (const name of ['Muse', 'Tiarina', 'Kenari']) {
+    const o = (obj && obj[name]) || {};
+    const e = clean[name] || {};
+    if (o.baseUrl !== undefined) e.baseUrl = String(o.baseUrl).trim().replace(/\/+$/, '');
+    if (o.apiKey !== undefined) e.apiKey = String(o.apiKey).trim();
+    if (o.model !== undefined) e.model = String(o.model).trim();
+    if (o.disabled !== undefined) e.disabled = !!o.disabled;
+    if (e.baseUrl && !/^https?:\/\//i.test(e.baseUrl)) throw new Error(name + ': base URL harus diawali http(s)://');
+    if (e.apiKey && e.apiKey.length > 2000) throw new Error(name + ': API key terlalu panjang');
+    // hapus field yang dikosongkan agar kembali ke env
+    ['baseUrl', 'apiKey', 'model'].forEach(function (k) { if (!e[k]) delete e[k]; });
+    if (Object.keys(e).length) clean[name] = e; else delete clean[name];
+  }
+  fs.mkdirSync(path.dirname(overridesPath()), { recursive: true });
+  fs.writeFileSync(overridesPath(), JSON.stringify(clean, null, 2));
+  return clean;
+}
+
+function applyOverrides(list) {
+  const ov = loadOverrides();
+  return list.map(function (p) {
+    const o = ov[p.name];
+    if (!o) return p;
+    if (o.disabled) return null;
+    return {
+      name: p.name,
+      baseUrl: o.baseUrl || p.baseUrl,
+      apiKey: o.apiKey || p.apiKey,
+      model: o.model || p.model,
+      overridden: !!(o.baseUrl || o.apiKey || o.model),
+    };
+  }).filter(Boolean);
+}
+
+function maskKey(k) {
+  k = String(k || '');
+  if (k.length <= 8) return k ? '••••' : '';
+  return k.slice(0, 3) + '••••' + k.slice(-4);
+}
+
+// Status provider untuk dashboard admin (key disamarkan, tidak pernah full).
+function providerStatus() {
+  const base = providers();
+  const withOv = applyOverrides(base);
+  const allOv = loadOverrides();
+  const names = ['Muse', 'Tiarina', 'Kenari'];
+  return names.map(function (name) {
+    const env = base.find(function (p) { return p.name === name; });
+    const cur = withOv.find(function (p) { return p.name === name; });
+    const ov = allOv[name] || {};
+    const sumber = ov.disabled ? 'dimatikan'
+      : !cur ? 'belum-dipasang'
+      : (cur.overridden ? 'override' : 'env');
+    return {
+      name,
+      aktif: !!cur,
+      baseUrl: cur ? cur.baseUrl : (env ? env.baseUrl : (ov.baseUrl || '')),
+      model: cur ? cur.model : (env ? env.model : (ov.model || '')),
+      keyMasked: cur && cur.apiKey ? maskKey(cur.apiKey) : '',
+      sumber,
+      byokOnly: process.env.BYOK_ONLY === '1',
+    };
+  });
+}
+
+// Tes koneksi satu provider: satu chat completion kecil non-streaming.
+async function testProvider(name) {
+  const p = applyOverrides(providers()).find(function (x) { return x.name === name; });
+  if (!p) throw new Error('Provider ' + name + ' tidak aktif / belum dipasang.');
+  const ctrl = new AbortController();
+  const timer = setTimeout(function () { ctrl.abort(); }, 30000);
+  let res;
+  try {
+    res = await fetch(p.baseUrl + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + p.apiKey },
+      body: JSON.stringify({
+        model: p.model,
+        messages: [{ role: 'user', content: 'Balas dengan tepat satu kata: ok' }],
+        max_tokens: 5, temperature: 0,
+      }),
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    throw new Error(p.name + ' gagal dihubungi: ' + (err && err.message ? err.message : err));
+  }
+  clearTimeout(timer);
+  if (!res.ok) {
+    let detail = '';
+    try { detail = String(await res.text()).slice(0, 160); } catch (_) {}
+    throw new Error(p.name + ' HTTP ' + res.status + (detail ? ' — ' + detail : ''));
+  }
+  const d = await res.json().catch(() => ({}));
+  const text = d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+  return { ok: true, balasan: String(text || '').slice(0, 60) };
+}
+
+module.exports = { generatePRD, callAI, byokProvider, providers, applyOverrides, loadOverrides, saveOverrides, providerStatus, testProvider, maskKey };

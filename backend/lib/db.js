@@ -132,4 +132,55 @@ const setDesignMd = (o, id, v) => patchField(o, id, { designmd: v });
 module.exports = {
   backend, savePRD, getPRD, listPRDs, deletePRD,
   appendSpecs, setSpecs, setFlowchart, setSuggestions, setAgentsMd, setDesignMd,
+  listAllPRDs, adminStats,
 };
+
+// ---- Khusus admin: lintas pemilik ----
+
+async function listAllPRDs(limit) {
+  limit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+  if (!useSupabase) {
+    return local.listPRDs()
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      .slice(0, limit)
+      .map((p) => ({
+        id: p.id, title: p.title, ownerId: p.ownerId || 'local',
+        createdAt: p.createdAt, updatedAt: p.updatedAt,
+        docs: ['markdown', 'specs', 'agentsmd', 'designmd'].filter((k) => p[k]).length,
+      }));
+  }
+  const rows = await sbReq('GET',
+    `/prds?select=id,title,owner_id,created_at,updated_at,markdown,specs,agentsmd,designmd&order=created_at.desc&limit=${limit}`);
+  return (rows || []).map((r) => ({
+    id: r.id, title: r.title, ownerId: r.owner_id || '-',
+    createdAt: r.created_at, updatedAt: r.updated_at,
+    docs: ['markdown', 'specs', 'agentsmd', 'designmd'].filter((k) => r[k]).length,
+  }));
+}
+
+async function sbCount(path) {
+  const res = await fetch(SUPABASE_URL + '/rest/v1' + path, {
+    headers: Object.assign(sbHeaders(), { Prefer: 'count=exact' }),
+  });
+  if (!res.ok) throw new Error('Supabase ' + res.status);
+  const cr = res.headers.get('content-range') || '';
+  const m = cr.match(/\/(\d+)\s*$/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+async function adminStats() {
+  const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+  if (!useSupabase) {
+    const all = local.listPRDs();
+    return {
+      backend: 'local',
+      totalPrd: all.length,
+      prd7hari: all.filter((p) => String(p.createdAt || '') >= weekAgo).length,
+      totalDokumen: all.reduce((n, p) =>
+        n + ['markdown', 'specs', 'agentsmd', 'designmd'].filter((k) => p[k]).length, 0),
+    };
+  }
+  const total = await sbCount('/prds?select=id');
+  const w = await sbCount(`/prds?select=id&created_at=gte.${encodeURIComponent(weekAgo)}`);
+  return { backend: 'supabase', totalPrd: total, prd7hari: w, totalDokumen: null };
+}
