@@ -1,0 +1,8 @@
+{
+  "name": "autoprd",
+  "version": "2.0.0",
+  "description": "AutoPRD.id — generator PRD Bahasa Indonesia",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "express": "^4.19.2" }
+}
