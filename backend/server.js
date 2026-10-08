@@ -142,11 +142,11 @@ app.post('/api/byok/test', async (req, res) => {
   }
 });
 
-function callAIWith(byok) {
+function callAIWith(byok, isAdmin) {
   const { callAI } = require('./lib/ai');
-  if (!byok) return callAI;
+  if (!byok && !isAdmin) return callAI;
   return function (system, user, opts) {
-    return callAI(system, user, Object.assign({}, opts, { byok }));
+    return callAI(system, user, Object.assign({}, opts, { byok: byok, isAdmin: !!isAdmin }));
   };
 }
 
@@ -171,7 +171,7 @@ app.post('/api/generate', async (req, res) => {
     const { generatePRD } = require('./lib/ai');
     const details = { description, audience, features, tech, answers, mindmap };
     const sections = [];
-    for await (const sec of generatePRD(String(idea), details, { byok, signal: ac.signal })) {
+    for await (const sec of generatePRD(String(idea), details, { byok, signal: ac.signal, isAdmin: isAdmin(req.user) })) {
       if (clientGone || res.writableEnded) break;
       sections.push(sec);
       sendLine(res, { type: 'section', id: sec.id, title: sec.title, markdown: sec.markdown });
@@ -209,6 +209,7 @@ app.post('/api/jobs', async (req, res) => {
       title: String(idea).trim(),
       payload: { description, audience, features, tech, answers, mindmap },
       byok,
+      isAdmin: isAdmin(req.user),
     });
     res.json({ ok: true, jobId: job.id });
   } catch (e) {
@@ -267,7 +268,7 @@ app.post('/api/prds/:id/specs', async (req, res) => {
   if (!prd) return res.status(404).json({ error: 'PRD tidak ditemukan.' });
   ndjsonHeaders(res);
   try {
-    const callAI = callAIWith(aiContextFrom(req).byok);
+    const callAI = callAIWith(aiContextFrom(req).byok, isAdmin(req.user));
     const { extractFeatures, generateFeatureSpec } = require('./lib/specs');
     sendLine(res, { type: 'status', message: 'Menganalisis fitur dari PRD...' });
     let features = [];
@@ -319,7 +320,7 @@ app.post('/api/prds/:id/flowchart', async (req, res) => {
   if (!prd) return res.status(404).json({ error: 'PRD tidak ditemukan.' });
   ndjsonHeaders(res);
   try {
-    const callAI = callAIWith(aiContextFrom(req).byok);
+    const callAI = callAIWith(aiContextFrom(req).byok, isAdmin(req.user));
     sendLine(res, { type: 'status', message: 'Merancang alur aplikasi...' });
     const system = 'Kamu arsitek software. Balas HANYA kode Mermaid, tanpa fence ``` dan tanpa penjelasan.';
     const user = 'Dari PRD berikut, buat flowchart alur utama aplikasi dalam format Mermaid. ' +
@@ -365,7 +366,7 @@ app.post('/api/prds/:id/suggest', async (req, res) => {
   if (!prd) return res.status(404).json({ error: 'PRD tidak ditemukan.' });
   ndjsonHeaders(res);
   try {
-    const callAI = callAIWith(aiContextFrom(req).byok);
+    const callAI = callAIWith(aiContextFrom(req).byok, isAdmin(req.user));
     const { parseJsonArray } = require('./lib/specs');
     sendLine(res, { type: 'status', message: 'Menganalisis peluang fitur...' });
     const system = 'Kamu product manager. Balas HANYA JSON array, tanpa penjelasan, tanpa markdown fence.';
@@ -404,7 +405,7 @@ app.post('/api/prds/:id/agentsmd', async (req, res) => {
   if (!prd) return res.status(404).json({ error: 'PRD tidak ditemukan.' });
   ndjsonHeaders(res);
   try {
-    const callAI = callAIWith(aiContextFrom(req).byok);
+    const callAI = callAIWith(aiContextFrom(req).byok, isAdmin(req.user));
     const { AGENTS_SYSTEM, buildAgentsUser, stripMdFence } = require('./lib/agentsmd');
     sendLine(res, { type: 'status', message: 'Menyusun AGENTS.md...' });
     const user = buildAgentsUser(prd);
@@ -432,7 +433,7 @@ app.post('/api/prds/:id/designmd', async (req, res) => {
   if (!prd) return res.status(404).json({ error: 'PRD tidak ditemukan.' });
   ndjsonHeaders(res);
   try {
-    const callAI = callAIWith(aiContextFrom(req).byok);
+    const callAI = callAIWith(aiContextFrom(req).byok, isAdmin(req.user));
     const { DESIGN_SYSTEM, buildDesignUser } = require('./lib/designmd');
     const { stripMdFence } = require('./lib/agentsmd');
     sendLine(res, { type: 'status', message: 'Menyusun design.md...' });
@@ -462,7 +463,7 @@ async function planHandler(req, res, fn, errLabel) {
   try { byok = aiContextFrom(req).byok; }
   catch (e) { return res.status(e.status || 500).json({ error: errMsg(e, errLabel) }); }
   try {
-    const callAI = callAIWith(byok);
+    const callAI = callAIWith(byok, isAdmin(req.user));
     res.json(await fn(req, callAI));
   } catch (e) {
     res.status(e.status || 500).json({ error: errMsg(e, errLabel) });
@@ -547,13 +548,13 @@ app.get('/api/admin/prds', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/ai', requireAdmin, (req, res) => {
   const { providerStatus } = require('./lib/ai');
-  res.json({ ok: true, providers: providerStatus() });
+  res.json(Object.assign({ ok: true }, providerStatus()));
 });
 
 app.post('/api/admin/ai/test', requireAdmin, async (req, res) => {
   try {
     const name = String((req.body && req.body.name) || '');
-    if (!['Muse', 'Tiarina', 'Kenari'].includes(name)) {
+    if (!['Muse', 'Tiarina', 'Kenari', '_adminKey'].includes(name)) {
       return res.status(400).json({ ok: false, error: 'Provider tidak dikenal.' });
     }
     const { testProvider } = require('./lib/ai');

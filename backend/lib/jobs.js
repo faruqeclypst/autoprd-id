@@ -100,6 +100,7 @@ function createJob(ownerId, input) {
     title: String(input.title || input.idea || '').trim().slice(0, 120),
     payload: input.payload || {},
     byok: input.byok || null, // memory only, tidak di-persist
+    isAdmin: !!input.isAdmin, // memory only, tidak di-persist
     status: 'queued',
     sections: SECTIONS.map((s, i) => ({ id: s.id, title: s.title, num: ('0' + (i + 1)).slice(-2), state: 'wait', markdown: '' })),
     error: null,
@@ -125,7 +126,7 @@ async function runJob(id) {
     const { generatePRD } = require('./ai');
     let idx = 0;
     if (job.sections[0]) job.sections[0].state = 'writing';
-    for await (const sec of generatePRD(job.idea, job.payload, { byok: job.byok, signal: ac.signal })) {
+    for await (const sec of generatePRD(job.idea, job.payload, { byok: job.byok, signal: ac.signal, isAdmin: job.isAdmin })) {
       const s = job.sections[idx];
       if (s) { s.state = 'done'; s.markdown = sec.markdown || ''; }
       idx += 1;

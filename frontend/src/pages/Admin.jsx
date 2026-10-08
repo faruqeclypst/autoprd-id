@@ -168,15 +168,103 @@ function KartuProvider({ p, onUji, onSimpan, hasilUji, sedangUji }) {
   );
 }
 
+// ---------- Kartu Kunci Admin (pribadi) ----------
+function KartuKunciAdmin({ info, onUji, onSimpan, hasilUji, sedangUji }) {
+  const [open, setOpen] = useState(false);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState('');
+  const [msg, setMsg] = useState('');
+  const [showKey, setShowKey] = useState(false);
+
+  function simpan() {
+    setMsg('');
+    onSimpan({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), model: model.trim() })
+      .then(function () {
+        setMsg('Tersimpan. Berlaku langsung tanpa restart.');
+        setOpen(false); setApiKey('');
+      })
+      .catch(function (e) { setMsg('Gagal: ' + e.message); });
+  }
+
+  function hapus() {
+    setMsg('');
+    onSimpan({ baseUrl: '', apiKey: '', model: '' })
+      .then(function () { setMsg('Kunci admin dihapus. Admin kembali memakai kunci umum.'); })
+      .catch(function (e) { setMsg('Gagal: ' + e.message); });
+  }
+
+  return (
+    <div className="card p-5" style={{ borderColor: 'var(--accent, #b5362a)' }}>
+      <div className="flex flex-wrap items-center gap-3">
+        <b style={{ fontSize: '1.05rem', color: 'var(--ink)' }}>Kunci Admin <span className="muted" style={{ fontWeight: 400 }}>(pribadi)</span></b>
+        <span className={'badge ' + (info.aktif ? 'badge-green' : 'badge-muted')}>{info.aktif ? 'Aktif' : 'Belum dipasang'}</span>
+        <span className="flex-1"></span>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={sedangUji || !info.aktif}
+          onClick={function () { onUji('_adminKey'); }}>
+          {sedangUji ? 'Menguji…' : 'Tes koneksi'}
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={function () { setOpen(function (o) { return !o; }); }}>
+          {open ? 'Tutup' : 'Ubah'}
+        </button>
+      </div>
+      <p className="text-sm muted mt-3" style={{ maxWidth: '38rem' }}>
+        Dipakai <b>duluan</b> setiap kali admin generate (gagal → failover ke kunci umum di bawah).
+        Tamu &amp; user biasa tidak pernah memakai key ini.
+      </p>
+      <div className="text-sm muted mt-2 space-y-1">
+        <div>Base URL: <code>{info.baseUrl || '—'}</code></div>
+        <div>Model: <code>{info.model || '—'}</code></div>
+        <div>Key: <code>{info.keyMasked || '—'}</code></div>
+      </div>
+      {hasilUji && <p className="text-sm mt-2" role="status" style={{ color: hasilUji.ok ? 'var(--green, #2e7d32)' : '#b3261e' }}>{hasilUji.pesan}</p>}
+      {open && (
+        <div className="mt-4 pt-4 space-y-4" style={{ borderTop: '1px solid var(--line, #e8e0d2)' }}>
+          <div>
+            <label className="lbl" htmlFor="ak-bu">Base URL</label>
+            <input id="ak-bu" className="field" placeholder="https://…" autoComplete="off" spellCheck="false"
+              value={baseUrl} onChange={function (e) { setBaseUrl(e.target.value); }} />
+          </div>
+          <div>
+            <label className="lbl" htmlFor="ak-ky">API key</label>
+            <div className="field-wrap">
+              <input id="ak-ky" type={showKey ? 'text' : 'password'} className="field" style={{ paddingRight: '4.5rem' }}
+                placeholder="kunci pribadi admin" autoComplete="off" spellCheck="false"
+                value={apiKey} onChange={function (e) { setApiKey(e.target.value); }} />
+              <button type="button" className="show-btn" onClick={function () { setShowKey(function (s) { return !s; }); }}>
+                {showKey ? 'Sembunyi' : 'Tampil'}
+              </button>
+            </div>
+          </div>
+          <div>
+            <label className="lbl" htmlFor="ak-md">Model</label>
+            <input id="ak-md" className="field" placeholder="nama-model" autoComplete="off" spellCheck="false"
+              value={model} onChange={function (e) { setModel(e.target.value); }} />
+          </div>
+          <div className="flex items-center gap-3">
+            <button type="button" className="btn btn-primary btn-sm" onClick={simpan}>Simpan kunci admin</button>
+            {info.aktif && <button type="button" className="btn btn-ghost btn-sm" onClick={hapus}>Hapus</button>}
+            {msg && <span className="text-sm muted" role="status">{msg}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PengaturanAI() {
   const [providers, setProviders] = useState(null);
+  const [adminKey, setAdminKey] = useState(null);
   const [err, setErr] = useState('');
   const [uji, setUji] = useState({}); // name -> {ok, pesan}
   const [sedangUji, setSedangUji] = useState(null);
 
   function muat() {
     setErr('');
-    getJson('/api/admin/ai').then(function (d) { setProviders(d.providers || []); }).catch(function (e) { setErr(e.message); });
+    getJson('/api/admin/ai').then(function (d) {
+      setProviders(d.providers || []);
+      setAdminKey(d.adminKey || { aktif: false, baseUrl: '', model: '', keyMasked: '' });
+    }).catch(function (e) { setErr(e.message); });
   }
   useEffect(muat, []);
 
@@ -197,13 +285,21 @@ function PengaturanAI() {
     muat();
   }
 
+  async function onSimpanAdmin(v) {
+    await apiJson('/api/admin/ai', { _adminKey: v });
+    muat();
+  }
+
   if (err) return <p className="muted text-sm">Gagal memuat: {err}</p>;
-  if (!providers) return <div className="space-y-4"><div className="card p-5"><div className="skeleton skel h-6 w-1/3"></div></div></div>;
+  if (!providers || !adminKey) return <div className="space-y-4"><div className="card p-5"><div className="skeleton skel h-6 w-1/3"></div></div></div>;
   return (
     <div className="space-y-4">
+      <KartuKunciAdmin info={adminKey} onUji={onUji} onSimpan={onSimpanAdmin}
+        hasilUji={uji._adminKey} sedangUji={sedangUji === '_adminKey'} />
       <p className="text-sm muted" style={{ maxWidth: '38rem' }}>
-        Provider AI yang dipakai server (failover berurutan). Key dari <code>.env</code> bisa di-override
-        dari sini tanpa restart — override tersimpan di server dan berlaku langsung.
+        <b>Kunci umum</b> — dipakai tamu (tanpa akun) &amp; user biasa yang tidak punya key sendiri
+        (failover berurutan). Key dari <code>.env</code> bisa di-override dari sini tanpa restart —
+        override tersimpan di server dan berlaku langsung.
       </p>
       {providers.map(function (p) {
         return <KartuProvider key={p.name} p={p} onUji={onUji} onSimpan={onSimpan}

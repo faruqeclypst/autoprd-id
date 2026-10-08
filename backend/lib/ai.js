@@ -143,15 +143,25 @@ async function* streamChat(p, system, user, opts) {
 /* callAI(system, user, opts): yields string chunks.
  * Coba Tiarina dulu; jika gagal (non-200/exception) dan KENARI_API_KEY ada,
  * coba Kenari sekali. Keduanya gagal -> throw Error('AI tidak tersedia...').
- * opts: { maxTokens, temperature, rotate, byok } — rotate: angka attempt, dipakai
- * untuk memutar urutan provider (attempt genap = Tiarina dulu, ganjil = Kenari dulu),
- * sehingga retry tidak mengulang provider yang sama.
+ * opts: { maxTokens, temperature, rotate, byok, isAdmin } — rotate: angka attempt,
+ * dipakai untuk memutar urutan provider (attempt genap = Tiarina dulu, ganjil =
+ * Kenari dulu), sehingga retry tidak mengulang provider yang sama.
  * byok: {baseUrl, apiKey, model} — bila valid, dipakai SENDIRI tanpa fallback
- * ke key server (supaya token pemilik server tidak terpakai pengunjung). */
+ * ke key server (supaya token pemilik server tidak terpakai pengunjung).
+ * isAdmin: bila true dan Kunci Admin dipasang, Kunci Admin dicoba DULU lalu
+ * failover ke kunci umum (provider server). Tamu & user biasa selalu pakai
+ * kunci umum. */
 async function* callAI(system, user, opts) {
   opts = opts || {};
   const byok = byokProvider(opts.byok);
-  let list = byok ? [byok] : applyOverrides(providers());
+  let list;
+  if (byok) {
+    list = [byok];
+  } else {
+    const umum = applyOverrides(providers());
+    const kunciAdmin = opts.isAdmin ? loadAdminKey() : null;
+    list = kunciAdmin ? [kunciAdmin].concat(umum) : umum;
+  }
   if (list.length === 0) {
     throw new Error('AI tidak tersedia: belum ada API key di server dan tidak ada BYOK. Tempel base URL + API key + model milikmu di Pengaturan (BYOK).');
   }
@@ -238,6 +248,7 @@ async function* generatePRD(idea, details, opts) {
   details = details || {};
   const byok = opts && opts.byok;
   const signal = opts && opts.signal;
+  const isAdmin = !!(opts && opts.isAdmin);
   const extra = buildExtraContext(details);
   let prev = '';
   for (const section of SECTIONS) {
@@ -250,7 +261,7 @@ async function* generatePRD(idea, details, opts) {
       PREV: prev.slice(-300),
     }) + extra;
     let markdown = '';
-    for await (const chunk of callAI(SYSTEM, user, { byok, signal })) {
+    for await (const chunk of callAI(SYSTEM, user, { byok, signal, isAdmin })) {
       markdown += chunk;
     }
     prev = markdown;
@@ -293,9 +304,31 @@ function saveOverrides(obj) {
     ['baseUrl', 'apiKey', 'model'].forEach(function (k) { if (!e[k]) delete e[k]; });
     if (Object.keys(e).length) clean[name] = e; else delete clean[name];
   }
+  // Kunci Admin (pribadi): di-set admin lewat panel, dipakai duluan saat admin
+  // generate; tamu & user biasa tidak pernah memakainya (mereka pakai kunci umum).
+  const ak = (obj && obj._adminKey) || {};
+  const cur = clean._adminKey || {};
+  if (ak.baseUrl !== undefined) cur.baseUrl = String(ak.baseUrl).trim().replace(/\/+$/, '');
+  if (ak.apiKey !== undefined) cur.apiKey = String(ak.apiKey).trim();
+  if (ak.model !== undefined) cur.model = String(ak.model).trim();
+  if (cur.baseUrl && !/^https?:\/\//i.test(cur.baseUrl)) throw new Error('Kunci Admin: base URL harus diawali http(s)://');
+  if (cur.apiKey && cur.apiKey.length > 2000) throw new Error('Kunci Admin: API key terlalu panjang');
+  ['baseUrl', 'apiKey', 'model'].forEach(function (k) { if (!cur[k]) delete cur[k]; });
+  if (Object.keys(cur).length) clean._adminKey = cur; else delete clean._adminKey;
   fs.mkdirSync(path.dirname(overridesPath()), { recursive: true });
   fs.writeFileSync(overridesPath(), JSON.stringify(clean, null, 2));
   return clean;
+}
+
+/* Kunci Admin (pribadi): return {name, baseUrl, apiKey, model} atau null bila
+ * belum dipasang lengkap. */
+function loadAdminKey() {
+  const ak = loadOverrides()._adminKey || {};
+  const baseUrl = String(ak.baseUrl || '').trim().replace(/\/+$/, '');
+  const apiKey = String(ak.apiKey || '').trim();
+  const model = String(ak.model || '').trim();
+  if (!/^https?:\/\//i.test(baseUrl) || !apiKey || !model) return null;
+  return { name: 'Kunci Admin', baseUrl, apiKey, model };
 }
 
 function applyOverrides(list) {
@@ -321,12 +354,13 @@ function maskKey(k) {
 }
 
 // Status provider untuk dashboard admin (key disamarkan, tidak pernah full).
+// Return { providers: [...], adminKey: {...} } — adminKey = Kunci Admin pribadi.
 function providerStatus() {
   const base = providers();
   const withOv = applyOverrides(base);
   const allOv = loadOverrides();
   const names = ['Muse', 'Tiarina', 'Kenari'];
-  return names.map(function (name) {
+  const daftar = names.map(function (name) {
     const env = base.find(function (p) { return p.name === name; });
     const cur = withOv.find(function (p) { return p.name === name; });
     const ov = allOv[name] || {};
@@ -343,12 +377,25 @@ function providerStatus() {
       byokOnly: process.env.BYOK_ONLY === '1',
     };
   });
+  const ak = loadAdminKey();
+  return {
+    providers: daftar,
+    adminKey: ak
+      ? { aktif: true, baseUrl: ak.baseUrl, model: ak.model, keyMasked: maskKey(ak.apiKey) }
+      : { aktif: false, baseUrl: '', model: '', keyMasked: '' },
+  };
 }
 
 // Tes koneksi satu provider: satu chat completion kecil non-streaming.
 async function testProvider(name) {
-  const p = applyOverrides(providers()).find(function (x) { return x.name === name; });
-  if (!p) throw new Error('Provider ' + name + ' tidak aktif / belum dipasang.');
+  let p;
+  if (name === '_adminKey') {
+    p = loadAdminKey();
+    if (!p) throw new Error('Kunci Admin belum dipasang lengkap.');
+  } else {
+    p = applyOverrides(providers()).find(function (x) { return x.name === name; });
+    if (!p) throw new Error('Provider ' + name + ' tidak aktif / belum dipasang.');
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(function () { ctrl.abort(); }, 30000);
   let res;
@@ -378,4 +425,4 @@ async function testProvider(name) {
   return { ok: true, balasan: String(text || '').slice(0, 60) };
 }
 
-module.exports = { generatePRD, callAI, byokProvider, providers, applyOverrides, loadOverrides, saveOverrides, providerStatus, testProvider, maskKey };
+module.exports = { generatePRD, callAI, byokProvider, providers, applyOverrides, loadOverrides, loadAdminKey, saveOverrides, providerStatus, testProvider, maskKey };
