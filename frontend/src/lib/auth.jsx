@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { setAuthToken } from './api';
+import { setAuthToken, apiFetch } from './api';
 
 const AuthCtx = createContext({
   user: null, isAdmin: true, authEnabled: false, ready: false,
@@ -52,7 +52,7 @@ export function AuthProvider({ children }) {
             setAuthToken(session.access_token);
             let isAdmin = false;
             try {
-              const c2 = await (await fetch('/api/config')).json();
+              const c2 = await (await apiFetch('/api/config')).json();
               isAdmin = !!(c2 && c2.isAdmin);
             } catch (_) {}
             if (!cancelled) setState({ user: user, isAdmin: isAdmin, authEnabled: true, ready: true });
